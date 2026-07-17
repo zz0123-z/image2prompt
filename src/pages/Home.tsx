@@ -1,34 +1,45 @@
 import { useState, useEffect } from 'react'
 import { Upload, Image, Copy, Check, RefreshCw, AlertCircle, Lock, Shield, Info } from 'lucide-react'
 
-const providerConfigs = {
+const providerConfigs: Record<string, {
+  name: string
+  icon: string
+  url: string
+  tips: string
+  footer: string
+  model: string
+}> = {
   gemini: {
     name: 'Google Gemini',
     icon: '🌐',
     url: 'https://aistudio.google.com/',
     tips: '💡 获取地址：https://aistudio.google.com/ (需海外网络)',
-    footer: 'Google Gemini - 多模态模型，功能强大'
+    footer: 'Google Gemini - 多模态模型，功能强大',
+    model: 'gemini-1.5-flash-latest'
   },
   qwen: {
     name: '阿里云通义千问',
     icon: '🐬',
     url: 'https://dashscope.console.aliyun.com/',
     tips: '💡 获取地址：https://dashscope.console.aliyun.com/ (国内直连)',
-    footer: '阿里云通义千问 Qwen-VL - 国内直连，支持支付宝/微信支付'
+    footer: '阿里云通义千问 Qwen-VL - 国内直连，支持支付宝/微信支付',
+    model: 'qwen-vl-plus'
   },
   deepseek: {
     name: 'DeepSeek',
     icon: '🤖',
     url: 'https://platform.deepseek.com/',
     tips: '💡 获取地址：https://platform.deepseek.com/ (国内直连)',
-    footer: 'DeepSeek - 国产顶尖模型，性价比极高'
+    footer: 'DeepSeek - 国产顶尖模型，性价比极高',
+    model: 'deepseek-chat'
   },
   zhipu: {
     name: '智谱AI',
     icon: '🧠',
     url: 'https://open.bigmodel.cn/',
     tips: '💡 获取地址：https://open.bigmodel.cn/ (国内直连)',
-    footer: '智谱AI GLM-4V - 图像理解能力强'
+    footer: '智谱AI GLM-4V - 图像理解能力强',
+    model: 'glm-4-flash'
   }
 }
 
@@ -71,16 +82,12 @@ export default function Home() {
     }
     showToast('正在验证密钥...')
     try {
-      const response = await fetch('/api/analyze/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: currentProvider, apiKey })
-      })
-      const data = await response.json()
-      if (data.valid) {
+      const config = providerConfigs[currentProvider]
+      const result = await callApi(config, apiKey, 'hello', null)
+      if (result.success) {
         showToast('✅ 密钥验证成功！')
       } else {
-        showError(data.message || '密钥验证失败')
+        showError(result.error || '密钥验证失败')
       }
     } catch (err) {
       showError('网络请求失败')
@@ -98,6 +105,99 @@ export default function Home() {
   const showError = (message: string) => {
     setError(message)
     setTimeout(() => setError(''), 5000)
+  }
+
+  const callApi = async (
+    config: typeof providerConfigs[string],
+    key: string,
+    prompt: string,
+    imageBase64?: string
+  ): Promise<{ success: boolean; data?: string; error?: string }> => {
+    try {
+      let url = ''
+      let requestBody: any
+      let headers: Record<string, string> = { 'Content-Type': 'application/json' }
+
+      switch (currentProvider) {
+        case 'gemini':
+          url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent?key=${key}`
+          const parts: any[] = [{ text: prompt }]
+          if (imageBase64) {
+            parts.unshift({ inlineData: { mimeType: 'image/jpeg', data: imageBase64.split(',')[1] } })
+          }
+          requestBody = { contents: [{ parts }] }
+          break
+        case 'qwen':
+          url = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+          headers.Authorization = `Bearer ${key}`
+          const qwenContent: any[] = [{ type: 'text', text: prompt }]
+          if (imageBase64) {
+            qwenContent.unshift({ type: 'image_url', image_url: { url: imageBase64 } })
+          }
+          requestBody = {
+            model: config.model,
+            messages: [{ role: 'user', content: qwenContent }],
+            max_tokens: 4096
+          }
+          break
+        case 'deepseek':
+          url = 'https://api.deepseek.com/v1/chat/completions'
+          headers.Authorization = `Bearer ${key}`
+          const deepseekContent: any[] = [{ type: 'text', text: prompt }]
+          if (imageBase64) {
+            deepseekContent.unshift({ type: 'image_url', image_url: { url: imageBase64 } })
+          }
+          requestBody = {
+            model: config.model,
+            messages: [{ role: 'user', content: deepseekContent }],
+            max_tokens: 4096
+          }
+          break
+        case 'zhipu':
+          url = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+          headers.Authorization = `Bearer ${key}`
+          const zhipuContent: any[] = [{ type: 'text', text: prompt }]
+          if (imageBase64) {
+            zhipuContent.unshift({ type: 'image_url', image_url: { url: imageBase64 } })
+          }
+          requestBody = {
+            model: config.model,
+            messages: [{ role: 'user', content: zhipuContent }],
+            max_tokens: 4096
+          }
+          break
+        default:
+          return { success: false, error: '不支持的API提供商' }
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody)
+      })
+
+      const data = await response.json()
+
+      if (!response.ok || data.error || data.code) {
+        return { success: false, error: data.error?.message || data.message || 'API调用失败' }
+      }
+
+      let resultText = ''
+      switch (currentProvider) {
+        case 'gemini':
+          resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+          break
+        case 'qwen':
+        case 'deepseek':
+        case 'zhipu':
+          resultText = data.choices?.[0]?.message?.content || ''
+          break
+      }
+
+      return { success: true, data: resultText }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : '网络请求失败' }
+    }
   }
 
   const handleDrop = (e: React.DragEvent) => {
@@ -166,24 +266,14 @@ export default function Home() {
 基于以上分析，生成一个完整的Midjourney提示词，包含所有关键元素，格式专业`
 
     try {
-      const response = await fetch('/api/analyze/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: currentProvider,
-          apiKey,
-          imageBase64: currentImageBase64,
-          prompt
-        })
-      })
+      const config = providerConfigs[currentProvider]
+      const result = await callApi(config, apiKey, prompt, currentImageBase64)
 
-      const data = await response.json()
-
-      if (!data.success) {
-        throw new Error(data.error || '分析失败')
+      if (!result.success) {
+        throw new Error(result.error || '分析失败')
       }
 
-      const resultText = data.data as string
+      const resultText = result.data as string
       parseResult(resultText)
     } catch (err) {
       showError(err instanceof Error ? err.message : '分析失败')
